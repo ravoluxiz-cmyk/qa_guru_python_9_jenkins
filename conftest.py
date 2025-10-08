@@ -25,7 +25,27 @@ def setup_browser(request):
     avoid masking test results.
     """
 
-    selenoid_url = os.getenv('SELENOID_URL', 'https://user1:1234@selenoid.autotests.cloud/wd/hub')
+    # Load .env if available (optional)
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except Exception:
+        # python-dotenv not installed or .env not present — continue with env
+        pass
+
+    # Prefer explicit full URL, otherwise build from components
+    selenoid_url = os.getenv('SELENOID_URL')
+    if not selenoid_url:
+        host = os.getenv('SELENOID_HOST')
+        user = os.getenv('SELENOID_USER')
+        password = os.getenv('SELENOID_PASSWORD')
+        port = os.getenv('SELENOID_PORT', '443')
+        if host and user and password:
+            selenoid_url = f"https://{user}:{password}@{host}:{port}/wd/hub"
+        else:
+            # fallback default kept for compatibility with older repo state
+            selenoid_url = os.getenv('SELENOID_URL', 'https://user1:1234@selenoid.autotests.cloud/wd/hub')
     driver = None
     browser = None
 
@@ -48,7 +68,7 @@ def setup_browser(request):
             warnings.warn(f"Cannot start remote webdriver at {selenoid_url}: {e}")
             driver = None
 
-    # Fallback to local Chrome using webdriver-manager
+    # Fallback to local Chrome using webdriver-manager (import lazily)
     if driver is None:
         try:
             # Add recommended options for CI/headless if requested
@@ -60,24 +80,35 @@ def setup_browser(request):
             # Ensure window size for headless runs
             options.add_argument('--window-size=1920,1080')
 
-            service = ChromeService(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=options)
+            try:
+                # Try webdriver-manager if available
+                from webdriver_manager.chrome import ChromeDriverManager  # lazy import
+                service = ChromeService(ChromeDriverManager().install())
+                driver = webdriver.Chrome(service=service, options=options)
+            except Exception as e_wdm:
+                warnings.warn(f"webdriver-manager not available or failed: {e_wdm}; trying chromedriver from PATH")
+                # Try to use chromedriver from PATH
+                try:
+                    driver = webdriver.Chrome(options=options)
+                except WebDriverException as e_path:
+                    warnings.warn(f"Cannot start local Chrome webdriver from PATH: {e_path}")
+                    driver = None
         except WebDriverException as e:
             warnings.warn(f"Cannot start local Chrome webdriver: {e}")
             driver = None
 
     if driver is None:
         pytest.skip(
-            "No webdriver available (tried remote Selenoid and local Chrome)."
-            " Set SELENOID_URL or ensure chromedriver is installed to run browser tests."
+            "No webdriver available (tried remote Selenoid and local Chrome).\n"
+            "To run browser tests locally: 1) install requirements: python3 -m pip install -r requirements.txt\n"
+            "2) install Google Chrome and ensure `chromedriver` is in PATH, or keep `webdriver-manager` in requirements.\n"
+            "Or set SELENOID_URL to a working remote WebDriver (e.g. https://user:pass@selenoid.example/wd/hub)."
         )
 
     # Wrap driver in Selene browser
-    try:
-        browser = Browser(Config(driver=driver))
-    except Exception:
-        # If that fails, try older signature
-        browser = Browser(Config(driver))
+    # Create Selene Browser using explicit Config to avoid signature issues
+    cfg = Config(driver=driver)
+    browser = Browser(cfg)
 
     try:
         yield browser
