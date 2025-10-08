@@ -5,6 +5,8 @@ import warnings
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.chrome.service import Service as ChromeService
+from webdriver_manager.chrome import ChromeDriverManager
 from selene import Browser, Config
 
 from utils import attach
@@ -46,10 +48,20 @@ def setup_browser(request):
             warnings.warn(f"Cannot start remote webdriver at {selenoid_url}: {e}")
             driver = None
 
-    # Fallback to local Chrome
+    # Fallback to local Chrome using webdriver-manager
     if driver is None:
         try:
-            driver = webdriver.Chrome(options=options)
+            # Add recommended options for CI/headless if requested
+            headless = os.getenv('HEADLESS', 'true').lower() in ('1', 'true', 'yes')
+            if headless:
+                options.add_argument('--headless=new')
+                options.add_argument('--no-sandbox')
+                options.add_argument('--disable-dev-shm-usage')
+            # Ensure window size for headless runs
+            options.add_argument('--window-size=1920,1080')
+
+            service = ChromeService(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
         except WebDriverException as e:
             warnings.warn(f"Cannot start local Chrome webdriver: {e}")
             driver = None
